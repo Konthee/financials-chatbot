@@ -81,6 +81,44 @@ the regenerated records as JSONL while importing. The fixture contains two vecto
 `(page, text)` chunk, so this script defaults to `--replicas-per-chunk 1` and produces 2036 unique
 chunks.
 
+## Web UI
+
+The frontend is a ChatGPT-style chat app served at <http://localhost:3000>. Sign in, then ask
+financial questions in Thai or English and watch the agent's reasoning, answer, and evidence stream
+in live.
+
+### Sign in
+
+<img src="assets/login.png" alt="Sign-in screen" width="600" />
+
+A JWT-protected sign-in screen gates the chat. The demo user is pre-seeded from `.env`
+(`DEMO_USER_EMAIL` / `DEMO_USER_PASSWORD`, default `demo@example.com` / `demo1234`). Submitting the
+form calls `POST /api/v1/auth/login`, and the returned bearer token authorizes every streaming chat
+request.
+
+### Chat workspace
+
+<img src="assets/chat-app.png" alt="Chat workspace" width="820" />
+
+After signing in you land in the main workspace:
+
+- **Left rail** — a "New chat" button, chat search, `Chats` / `Account` tabs, and the browser-local
+  list of past chat sections. The signed-in account shows at the bottom.
+- **Conversation** — your question appears on the right; the assistant's Markdown answer renders
+  below it (headings, bullets, and a Thai summary that mirrors the question language).
+- **Thought process** — a collapsible, step-by-step timeline of the agent's reasoning with
+  human-readable labels. The first step is the **orchestrator's routing decision**; in this
+  screenshot it picks `financial-qa` because the user asked for specific Apple net-income figures.
+  The remaining steps show preflight source selection, SQL retrieval, grounding validation, and
+  answer drafting.
+- **Reference** — an expandable evidence panel under the answer. SQL evidence renders as a table
+  (company, ticker, year, value); 10-K evidence renders as expandable citation cards.
+
+The screenshot shows the first baseline question ("สรุป net income ปี 2022-2025 ของบริษัท Apple"):
+the orchestrator routes to financial-qa, the agent queries `financial_data`, and the answer reports
+Apple's net income for FY2022-FY2025 ($99.8B, $96.995B, $93.736B, $112.01B) with the exact SQL rows
+shown as grounded references.
+
 ## Baseline Questions
 
 Use these prompts to verify the required behavior:
