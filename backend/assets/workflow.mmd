@@ -1,0 +1,30 @@
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+	__start__([<p>__start__</p>]):::first
+	get_history(get_history)
+	orchestrator(orchestrator)
+	preflight(preflight)
+	agent(agent)
+	tools(<b>tools</b><hr/><i>query_financials</i><br/><i>run_sql_select</i><br/><i>search_filings</i>)
+	validate(validate)
+	chat_agent(chat_agent)
+	save_history(save_history)
+	__end__([<p>__end__</p>]):::last
+	__start__ --> get_history;
+	agent -.-> tools;
+	agent -.-> validate;
+	chat_agent --> save_history;
+	get_history --> orchestrator;
+	orchestrator -. &nbsp;CHAT&nbsp; .-> chat_agent;
+	orchestrator -. &nbsp;FINANCIAL_QA&nbsp; .-> preflight;
+	preflight --> agent;
+	tools --> agent;
+	validate --> save_history;
+	save_history --> __end__;
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc

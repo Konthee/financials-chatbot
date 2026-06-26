@@ -1,0 +1,65 @@
+# Local data + app stack for the Financial QA chatbot.
+#
+#   docker compose up --build -d                      # bootstrap data and run the app
+#
+# The backend startup command loads SQL and vectors before launching uvicorn. Hostnames
+# (`postgres`, `pinecone-local`) resolve on the compose network, which is why the loaders
+# must run inside the stack.
+
+x-backend-common: &backend-common
+  build: ./backend
+  env_file: .env
+  environment:
+    PYTHONPATH: /app/src
+    DATA_DIR: /app/data
+  volumes:
+    - ./backend/src:/app/src           # live code mount for fast iteration
+    - ./backend/assets:/app/assets
+    - ./data:/app/data:rw              # provided fixtures, read-write for loaders
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./volume/pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  pinecone-local:
+    image: ghcr.io/pinecone-io/pinecone-local:latest
+    environment:
+      PORT: 5080
+      # Host advertised for created indexes. Must be reachable by the backend, so it is the
+      # compose service name (each index is then served at pinecone-local:5081, :5082, ...).
+      PINECONE_HOST: pinecone-local
+    ports:
+      - "5080-5090:5080-5090"
+
+  backend:
+    <<: *backend-common
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      pinecone-local:
+        condition: service_started
+    command: sh -c "python scripts/load_sql.py && python scripts/load_vectors.py && exec uvicorn financial_qa.app.main:app --host 0.0.0.0 --port 8000"
+
+  frontend:
+    build: ./frontend
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL}
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend

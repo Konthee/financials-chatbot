@@ -1,0 +1,11 @@
+# LiteLLM router config. Values in ${...} are expanded from the environment at load time, so the
+# active model and credentials are driven entirely by .env. To switch providers, change MODEL_NAME
+# / BASE_URL / API_KEY (or add another entry below). Cost-per-token defaults are for gpt-4o-mini.
+models:
+  - model_name: "${MODEL_NAME}"
+    litellm_params:
+      model: "openai/${MODEL_NAME}"
+      api_base: "${BASE_URL}"
+      api_key: "${API_KEY}"
+      input_cost_per_token: 0.00000015
+      output_cost_per_token: 0.00000060
