@@ -16,9 +16,12 @@ class ChatMessage(BaseModel):
 
 
 class ChatRunRequest(BaseModel):
-    """Body of POST /api/v1/chat/runs/stream."""
+    """Body of POST /api/v1/chat/runs/stream and /api/v1/chat/runs."""
 
     messages: list[ChatMessage] = Field(default_factory=list)
+    session_id: str | None = Field(
+        default=None, description="Target chat session; omit to create a new one."
+    )
 
 
 # --- Routing decision (orchestrator node structured output) ------------------------------

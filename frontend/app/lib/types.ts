@@ -1,7 +1,7 @@
 export type EvidenceItem = Record<string, unknown>;
 
 export type StreamEvent =
-  | { type: "run.started"; seq: number; run_id: string; trace_id: string | null; model: string }
+  | { type: "run.started"; seq: number; run_id: string; trace_id: string | null; model: string; session_id?: string }
   | { type: "node.finished"; seq: number; node: string }
   | { type: "reasoning.delta"; seq: number; text: string; phase?: string }
   | { type: "tool.selected"; seq: number; tool: string; args: Record<string, unknown> }
@@ -24,6 +24,23 @@ export type StreamEvent =
 export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
+}
+
+export interface SessionSummary {
+  id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SessionDetail extends SessionSummary {
+  messages: ChatMessage[];
+  last_render: { events: StreamEvent[]; trace_id: string | null } | null;
+}
+
+export interface UserProfile {
+  email: string;
+  created_at: string;
 }
 
 export interface TimelineStep {

@@ -49,6 +49,23 @@ class ChatWorkflowService:
                 "finish_reason": "stop",
             }
 
+    async def arun(self, *, user_id: str, messages: list[dict]) -> dict[str, Any]:
+        """Run the same compiled graph to completion and return only the final answer.
+
+        Used by the non-streaming endpoint. The graph (including ``save_history``) is identical to
+        the streaming path; progress ``emit`` calls are no-ops when not streaming.
+        """
+        initial = {"user_id": user_id, "input": messages, "usage": empty_usage()}
+        with langfuse.trace_run() as trace_id:
+            config = {"callbacks": langfuse.callbacks()}
+            final_state = await self._graph.ainvoke(initial, config=config)
+        return {
+            "answer": final_state.get("output", ""),
+            "usage": final_state.get("usage", empty_usage()),
+            "grounded": final_state.get("grounded"),
+            "trace_id": trace_id,
+        }
+
 
 @lru_cache
 def get_chat_workflow_service() -> ChatWorkflowService:

@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select
 
-from financial_qa.app.api.routes import auth, chat, health
+from financial_qa.app.api.routes import auth, chat, health, sections, users
 from financial_qa.app.infrastructure import models  # noqa: F401  (register tables on Base.metadata)
 from financial_qa.app.infrastructure.db import Base, SessionLocal, engine
 from financial_qa.app.infrastructure.models import User
@@ -52,6 +52,8 @@ def create_app() -> FastAPI:
 
     app.include_router(health.router)
     app.include_router(auth.router)
+    app.include_router(users.router)
+    app.include_router(sections.router)
     app.include_router(chat.router)
     return app
 

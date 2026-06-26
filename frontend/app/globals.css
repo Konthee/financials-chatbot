@@ -106,6 +106,21 @@ h2 {
   margin: 0;
 }
 
+.authToggle {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 13px;
+  padding: 4px;
+  cursor: pointer;
+  justify-self: center;
+}
+
+.authToggle:hover {
+  color: var(--ink);
+  text-decoration: underline;
+}
+
 .secondary {
   background: white;
   color: var(--ink);
@@ -455,6 +470,38 @@ h2 {
 
 .markdownMessage a {
   color: #1f5fbf;
+}
+
+.markdownTableWrap {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  margin: 0 0 14px;
+}
+
+.markdownTable {
+  width: 100%;
+  border-collapse: collapse;
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.markdownTable th,
+.markdownTable td {
+  border-bottom: 1px solid var(--line);
+  padding: 8px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.markdownTable th {
+  background: #fafafa;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.markdownTable tr:last-child td {
+  border-bottom: 0;
 }
 
 .thoughtDisclosure {

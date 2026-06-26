@@ -229,6 +229,28 @@ node. Purely numeric requests should use `query_financials` or `run_sql_select`;
 should use `search_filings`; mixed comparison questions should gather both SQL figures and filing
 passages before drafting the final Markdown answer.
 
+## Accounts & Chat Sessions
+
+Accounts and chat sessions are persisted in PostgreSQL and scoped per user; the browser only keeps
+the JWT. The AI graph is unchanged — a session's id is passed to the graph as its history key, and
+ownership is enforced in the API layer.
+
+| Method & path | Auth | Purpose |
+| --- | --- | --- |
+| `POST /api/v1/auth/register` | – | Create an account (409 if the email exists); returns a JWT. |
+| `POST /api/v1/auth/login` | – | Exchange email + password for a JWT. |
+| `GET /api/v1/users/me` | Bearer | Current-user profile (email, created_at). |
+| `GET /api/v1/sections` | Bearer | List the user's chat sessions, newest first. |
+| `GET /api/v1/sections/{id}` | Bearer | Load a session: messages + the full-fidelity reload payload. |
+| `DELETE /api/v1/sections/{id}` | Bearer | Delete a session and its messages. |
+| `POST /api/v1/chat/runs/stream` | Bearer | Streaming NDJSON answer; lazily creates the session and persists its reload payload. |
+| `POST /api/v1/chat/runs` | Bearer | Non-streaming: returns only the final answer `{session_id, answer, usage, …}`. |
+
+Sessions are created lazily by the chat endpoints — send a chat with no `session_id` and the response
+(`run.started` for the stream, the JSON body for the non-stream route) carries the new `session_id`.
+Reopening a session restores both the conversation and its Thought-process timeline + SQL/10-K
+evidence, because the stream route stores the turn's progress events on the session.
+
 ## Useful Commands
 
 Backend local run from `backend/`:
@@ -254,11 +276,23 @@ curl -N http://localhost:8000/api/v1/chat/runs/stream \
   -d '{"messages":[{"role":"user","content":"สรุป net income ปี 2022-2025 ของบริษัท Apple"}]}'
 ```
 
+Non-streaming variant (final answer only):
+
+```bash
+curl http://localhost:8000/api/v1/chat/runs \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"messages":[{"role":"user","content":"สรุป net income ปี 2022-2025 ของบริษัท Apple"}]}'
+```
+
 ## Architecture
 
 - `backend/src/financial_qa/app/main.py`: FastAPI app, CORS, lifespan table creation, demo user seed.
 - `backend/src/financial_qa/app/agent/`: LangGraph workflow, grounded tools, prompts, validation, NDJSON event helpers.
+- `backend/src/financial_qa/app/api/routes/`: `auth` (register/login), `users` (profile), `sections` (chat-session CRUD), `chat` (stream + non-stream), `health`.
+- `backend/src/financial_qa/app/infrastructure/`: settings, async DB, ORM models (`User`, `ChatSession`, `ChatTurn`), `sessions.py` session repository, JWT/password security, conversation history.
 - `backend/scripts/`: SQL and vector fixture loaders.
 - `backend/scripts/reembed_vectors_from_pdfs.py`: optional PDF re-ingestion path that rebuilds embeddings from source filings.
-- `frontend/app/page.tsx`: login, chat stream reader, progress timeline, and evidence panel.
+- `frontend/app/lib/api.ts`: typed backend client (auth, sessions, chat) shared by the UI.
+- `frontend/app/page.tsx`: auth screen, server-backed section rail, chat stream reader, progress timeline, and evidence panel.
 - `data/`: provided SQL dump, vector fixture, and source 10-K PDFs.

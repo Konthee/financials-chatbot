@@ -1,11 +1,11 @@
 "use client";
 
 import { FormEvent, ReactNode, useEffect, useMemo, useReducer, useRef, useState } from "react";
-import type { ChatMessage, EvidenceItem, StreamEvent, TimelineStep } from "./lib/types";
+import * as api from "./lib/api";
+import { API_BASE, ApiError } from "./lib/api";
+import type { ChatMessage, EvidenceItem, SessionSummary, StreamEvent, TimelineStep, UserProfile } from "./lib/types";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 const TOKEN_KEY = "financial_qa_token";
-const SECTIONS_KEY = "financial_qa_sections";
 
 interface ChatState {
   messages: ChatMessage[];
@@ -15,13 +15,6 @@ interface ChatState {
   traceId: string | null;
   isStreaming: boolean;
   error: string | null;
-}
-
-interface ChatSection {
-  id: string;
-  title: string;
-  updatedAt: number;
-  state: ChatState;
 }
 
 type Action =
@@ -200,6 +193,30 @@ function reducer(state: ChatState, action: Action): ChatState {
   return { ...state, timeline };
 }
 
+/** Rebuild a section's ChatState from server data: messages + replayed progress events (full fidelity).
+ * Folds events through the same eventLabel/dedupe rules the live reducer uses. */
+function buildLoadedState(messages: ChatMessage[], events: StreamEvent[], traceId: string | null): ChatState {
+  let timeline: TimelineStep[] = [];
+  let evidence: { source: string; items: EvidenceItem[] }[] = [];
+  for (const event of events) {
+    const step = eventLabel(event);
+    if (step) {
+      const existing = timeline.find((item) => item.label === step.label);
+      if (existing) {
+        if (step.detail) {
+          timeline = timeline.map((item) => (item.label === step.label ? { ...item, detail: step.detail } : item));
+        }
+      } else {
+        timeline = [...timeline, step];
+      }
+    }
+    if (event.type === "evidence") {
+      evidence = [...evidence, { source: event.source, items: event.items }];
+    }
+  }
+  return { messages, answerDraft: "", timeline, evidence, traceId, isStreaming: false, error: null };
+}
+
 function compactValue(value: unknown): string {
   if (value === null || value === undefined) return "";
   if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return String(value);
@@ -291,6 +308,25 @@ function renderHeading(level: number, content: ReactNode[], key: string): ReactN
   return <h6 key={key}>{content}</h6>;
 }
 
+function splitTableRow(line: string): string[] {
+  return line
+    .trim()
+    .replace(/^\|/, "")
+    .replace(/\|$/, "")
+    .split("|")
+    .map((cell) => cell.trim());
+}
+
+function isTableRow(line: string): boolean {
+  return /^\s*\|.*\|\s*$/.test(line);
+}
+
+function isTableDivider(line: string): boolean {
+  if (!isTableRow(line)) return false;
+  const cells = splitTableRow(line);
+  return cells.length > 0 && cells.every((cell) => /^:?-+:?$/.test(cell));
+}
+
 function MarkdownMessage({ content }: { content: string }) {
   const blocks: ReactNode[] = [];
   const lines = content.split("\n");
@@ -325,6 +361,39 @@ function MarkdownMessage({ content }: { content: string }) {
       const text = line.replace(/^#{1,6}\s+/, "");
       blocks.push(renderHeading(level, renderInlineMarkdown(text), `h-${index}`));
       index += 1;
+      continue;
+    }
+
+    if (isTableRow(line) && index + 1 < lines.length && isTableDivider(lines[index + 1])) {
+      const headers = splitTableRow(line);
+      index += 2; // skip the header row and the divider row
+      const rows: string[][] = [];
+      while (index < lines.length && isTableRow(lines[index]) && !isTableDivider(lines[index])) {
+        rows.push(splitTableRow(lines[index]));
+        index += 1;
+      }
+      blocks.push(
+        <div className="markdownTableWrap" key={`table-${index}`}>
+          <table className="markdownTable">
+            <thead>
+              <tr>
+                {headers.map((cell, cellIndex) => (
+                  <th key={cellIndex}>{renderInlineMarkdown(cell)}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row, rowIndex) => (
+                <tr key={rowIndex}>
+                  {headers.map((_, cellIndex) => (
+                    <td key={cellIndex}>{renderInlineMarkdown(row[cellIndex] ?? "")}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>,
+      );
       continue;
     }
 
@@ -480,45 +549,19 @@ function ReferenceDisclosure({ evidence }: { evidence: { source: string; items: 
   );
 }
 
-function blankSection(): ChatSection {
-  const now = Date.now();
-  return {
-    id: String(now),
-    title: "New section",
-    updatedAt: now,
-    state: initialState,
-  };
-}
-
-function stateTitle(state: ChatState): string {
-  const firstUserMessage = state.messages.find((message) => message.role === "user");
-  if (!firstUserMessage) return "New section";
-  return firstUserMessage.content.length > 54 ? `${firstUserMessage.content.slice(0, 54)}...` : firstUserMessage.content;
-}
-
-function safeSections(): ChatSection[] {
-  try {
-    const stored = localStorage.getItem(SECTIONS_KEY);
-    if (!stored) return [];
-    const parsed = JSON.parse(stored) as ChatSection[];
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-
 export default function Home() {
   const [state, dispatch] = useReducer(reducer, initialState);
   const [email, setEmail] = useState("demo@example.com");
   const [password, setPassword] = useState("demo1234");
+  const [authMode, setAuthMode] = useState<"login" | "register">("login");
   const [token, setToken] = useState("");
   const [question, setQuestion] = useState("");
   const [loginError, setLoginError] = useState<string | null>(null);
-  const [sections, setSections] = useState<ChatSection[]>([]);
+  const [sections, setSections] = useState<SessionSummary[]>([]);
   const [activeSectionId, setActiveSectionId] = useState("");
+  const [profile, setProfile] = useState<UserProfile | null>(null);
   const [view, setView] = useState<"chat" | "settings">("chat");
   const [searchQuery, setSearchQuery] = useState("");
-  const [hydrated, setHydrated] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
@@ -526,35 +569,33 @@ export default function Home() {
     setToken(localStorage.getItem(TOKEN_KEY) ?? "");
   }, []);
 
+  // Hydrate profile + section rail from the server whenever a token becomes available.
   useEffect(() => {
     if (!token) return;
-    const storedSections = safeSections();
-    const nextSections = storedSections.length ? storedSections : [blankSection()];
-    setSections(nextSections);
-    setActiveSectionId(nextSections[0].id);
-    dispatch({ type: "load", state: nextSections[0].state });
-    setHydrated(true);
+    let cancelled = false;
+    (async () => {
+      try {
+        const [me, list] = await Promise.all([api.getProfile(token), api.listSections(token)]);
+        if (cancelled) return;
+        setProfile(me);
+        setSections(list);
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 401) signOut();
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [token]);
 
-  useEffect(() => {
-    if (!hydrated || !activeSectionId) return;
-    setSections((currentSections) => {
-      const nextSections = currentSections
-        .map((section) =>
-          section.id === activeSectionId
-            ? {
-                ...section,
-                title: stateTitle(state),
-                updatedAt: Date.now(),
-                state,
-              }
-            : section,
-        )
-        .sort((left, right) => right.updatedAt - left.updatedAt);
-      localStorage.setItem(SECTIONS_KEY, JSON.stringify(nextSections.slice(0, 12)));
-      return nextSections.slice(0, 12);
-    });
-  }, [activeSectionId, hydrated, state]);
+  async function refreshSections() {
+    if (!token) return;
+    try {
+      setSections(await api.listSections(token));
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) signOut();
+    }
+  }
 
   const visibleMessages = useMemo(() => {
     if (!state.answerDraft && state.isStreaming) {
@@ -578,60 +619,58 @@ export default function Home() {
     textarea.style.height = `${Math.min(textarea.scrollHeight, 180)}px`;
   }, [question]);
 
-  async function login(event: FormEvent) {
+  async function authenticate(event: FormEvent) {
     event.preventDefault();
     setLoginError(null);
-    const response = await fetch(`${API_BASE}/api/v1/auth/login`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password }),
-    });
-    if (!response.ok) {
-      setLoginError("Sign-in failed");
-      return;
+    try {
+      const body = authMode === "register" ? await api.register(email, password) : await api.login(email, password);
+      localStorage.setItem(TOKEN_KEY, body.access_token);
+      setToken(body.access_token);
+    } catch (error) {
+      setLoginError(error instanceof ApiError ? error.message : "Authentication failed");
     }
-    const body = (await response.json()) as { access_token: string };
-    localStorage.setItem(TOKEN_KEY, body.access_token);
-    setToken(body.access_token);
   }
 
   function newSection() {
     if (state.isStreaming) return;
-    const section = blankSection();
-    setSections((currentSections) => {
-      const nextSections = [section, ...currentSections].slice(0, 12);
-      localStorage.setItem(SECTIONS_KEY, JSON.stringify(nextSections));
-      return nextSections;
-    });
-    setActiveSectionId(section.id);
-    dispatch({ type: "load", state: section.state });
+    setActiveSectionId("");
+    dispatch({ type: "load", state: initialState });
     setQuestion("");
     setView("chat");
   }
 
-  function continueSection(section: ChatSection) {
-    if (state.isStreaming) return;
-    setActiveSectionId(section.id);
-    dispatch({ type: "load", state: section.state });
+  async function continueSection(section: SessionSummary) {
+    if (state.isStreaming || section.id === activeSectionId) return;
     setView("chat");
+    try {
+      const detail = await api.getSection(token, section.id);
+      setActiveSectionId(detail.id);
+      dispatch({
+        type: "load",
+        state: buildLoadedState(detail.messages, detail.last_render?.events ?? [], detail.last_render?.trace_id ?? null),
+      });
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) signOut();
+      else dispatch({ type: "error", message: error instanceof Error ? error.message : "Failed to load chat" });
+    }
   }
 
-  function deleteSection(sectionId: string) {
+  async function deleteSection(sectionId: string) {
     if (state.isStreaming) return;
-    setSections((currentSections) => {
-      const remainingSections = currentSections.filter((section) => section.id !== sectionId);
-      const nextSections = remainingSections.length ? remainingSections : [blankSection()];
-      const nextActiveSection = nextSections[0];
-      localStorage.setItem(SECTIONS_KEY, JSON.stringify(nextSections));
-
-      if (sectionId === activeSectionId) {
-        setActiveSectionId(nextActiveSection.id);
-        dispatch({ type: "load", state: nextActiveSection.state });
-        setQuestion("");
+    try {
+      await api.deleteSection(token, sectionId);
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) {
+        signOut();
+        return;
       }
-
-      return nextSections;
-    });
+    }
+    setSections((current) => current.filter((section) => section.id !== sectionId));
+    if (sectionId === activeSectionId) {
+      setActiveSectionId("");
+      dispatch({ type: "load", state: initialState });
+      setQuestion("");
+    }
   }
 
   async function ask(nextQuestion = question) {
@@ -642,14 +681,22 @@ export default function Home() {
     const controller = new AbortController();
     abortRef.current = controller;
 
+    const handleEvent = (event: StreamEvent) => {
+      // Adopt the session id the server assigns a lazily-created chat.
+      if (event.type === "run.started" && event.session_id && event.session_id !== activeSectionId) {
+        setActiveSectionId(event.session_id);
+      }
+      dispatch({ type: "event", event });
+    };
+
     try {
-      const response = await fetch(`${API_BASE}/api/v1/chat/runs/stream`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: [{ role: "user", content: trimmed }] }),
-        signal: controller.signal,
-      });
+      const response = await api.streamChat(
+        token,
+        { session_id: activeSectionId || null, messages: [{ role: "user", content: trimmed }] },
+        controller.signal,
+      );
       if (!response.ok || !response.body) {
+        if (response.status === 401) signOut();
         throw new Error(`Request failed (${response.status})`);
       }
       const reader = response.body.getReader();
@@ -663,13 +710,14 @@ export default function Home() {
         buffer = lines.pop() ?? "";
         for (const line of lines) {
           if (!line.trim()) continue;
-          dispatch({ type: "event", event: JSON.parse(line) as StreamEvent });
+          handleEvent(JSON.parse(line) as StreamEvent);
         }
       }
       if (buffer.trim()) {
-        dispatch({ type: "event", event: JSON.parse(buffer) as StreamEvent });
+        handleEvent(JSON.parse(buffer) as StreamEvent);
       }
       dispatch({ type: "finish" });
+      await refreshSections();
     } catch (error) {
       if ((error as Error).name !== "AbortError") {
         dispatch({ type: "error", message: (error as Error).message });
@@ -684,16 +732,17 @@ export default function Home() {
     setToken("");
     setSections([]);
     setActiveSectionId("");
-    setHydrated(false);
+    setProfile(null);
+    dispatch({ type: "load", state: initialState });
   }
 
   if (!token) {
     return (
       <main className="loginShell">
-        <form className="loginPanel" onSubmit={login}>
+        <form className="loginPanel" onSubmit={authenticate}>
           <div>
             <p className="eyebrow">Financial QA</p>
-            <h1>Sign in</h1>
+            <h1>{authMode === "register" ? "Create account" : "Sign in"}</h1>
           </div>
           <label>
             Email
@@ -704,7 +753,17 @@ export default function Home() {
             <input value={password} onChange={(event) => setPassword(event.target.value)} type="password" />
           </label>
           {loginError ? <p className="errorText">{loginError}</p> : null}
-          <button type="submit">Sign in</button>
+          <button type="submit">{authMode === "register" ? "Create account" : "Sign in"}</button>
+          <button
+            className="authToggle"
+            onClick={() => {
+              setAuthMode(authMode === "register" ? "login" : "register");
+              setLoginError(null);
+            }}
+            type="button"
+          >
+            {authMode === "register" ? "Have an account? Sign in" : "New here? Create an account"}
+          </button>
         </form>
       </main>
     );
@@ -772,7 +831,7 @@ export default function Home() {
           </div>
           <div className="accountStrip">
             <div>
-              <strong>{email}</strong>
+              <strong>{profile?.email ?? email}</strong>
               <span>Business</span>
             </div>
             <button aria-label="Account settings" className="iconButton" onClick={() => setView("settings")} type="button">
@@ -795,19 +854,19 @@ export default function Home() {
             <div className="settingsGrid">
               <div className="settingsField">
                 <span>Email</span>
-                <strong>{email}</strong>
+                <strong>{profile?.email ?? email}</strong>
+              </div>
+              <div className="settingsField">
+                <span>Member since</span>
+                <strong>{profile ? new Date(profile.created_at).toLocaleDateString() : "—"}</strong>
               </div>
               <div className="settingsField">
                 <span>API endpoint</span>
                 <strong>{API_BASE}</strong>
               </div>
               <div className="settingsField">
-                <span>Saved frontend sections</span>
+                <span>Saved chats</span>
                 <strong>{sections.length}</strong>
-              </div>
-              <div className="settingsField">
-                <span>Authentication</span>
-                <strong>{token ? "Signed in" : "Signed out"}</strong>
               </div>
             </div>
           </section>
